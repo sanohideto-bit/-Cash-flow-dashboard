@@ -5,23 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>工務店向け 資金繰りダッシュボード</title>
 
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
 
-    <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
-    <!-- PropTypes -->
     <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
 
-    <!-- Recharts -->
     <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 
-    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
@@ -58,7 +52,6 @@
           return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         };
 
-        // テンプレートの初期データ（割合は %）
         const INITIAL_TEMPLATES = [
           {
             id: 'tpl1',
@@ -99,7 +92,7 @@
             { id: 'f1', name: '役員報酬・社員給与', amount: 150, type: 'monthly' },
             { id: 'f2', name: '事務所家賃・経費', amount: 50, type: 'monthly' },
             { id: 'f3', name: '銀行借入 元本返済', amount: 80, type: 'monthly' }, 
-            { id: 'f4', name: '消費税・法人税 納付', amount: 350, type: 'spot', month: '2026-05' }, 
+            { id: 'f4', name: '消費税・法人税 納付', amount: 1250, type: 'spot', month: '2026-05' }, 
           ]
         };
 
@@ -163,13 +156,20 @@
               const receivedIncome = pTrans.filter(t => t.type === 'income' && t.status === '入金済').reduce((sum, t) => sum + t.amount, 0);
               const totalExpense = pTrans.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
               const expectedProfit = p.contractAmount - totalExpense;
+              const profitMargin = p.contractAmount > 0 ? Math.round((expectedProfit / p.contractAmount) * 100) : 0;
+              
               return {
-                ...p, receivedIncome, totalExpense, expectedProfit,
+                ...p, receivedIncome, totalExpense, expectedProfit, profitMargin,
                 incomeProgress: Math.round((receivedIncome / p.contractAmount) * 100) || 0,
                 transactions: pTrans.sort((a, b) => a.date.localeCompare(b.date))
               };
             });
           }, [data]);
+
+          const minCashData = cashflowData.reduce((min, p) => p['月末予想残高'] < min['月末予想残高'] ? p : min, cashflowData[0] || { '月末予想残高': 0 });
+          const totalContractVolume = projectHealth.reduce((sum, p) => sum + p.contractAmount, 0);
+          const totalExpectedProfit = projectHealth.reduce((sum, p) => sum + p.expectedProfit, 0);
+          const averageProfitMargin = totalContractVolume > 0 ? Math.round((totalExpectedProfit / totalContractVolume) * 100) : 0;
 
           const dangerMonths = cashflowData.filter(d => d.isDanger);
 
@@ -181,7 +181,6 @@
           const deleteProject = (id) => setData(prev => ({ ...prev, projects: prev.projects.filter(p => p.id !== id), transactions: prev.transactions.filter(t => t.projectId !== id) }));
           const deleteFixedCost = (id) => setData(prev => ({ ...prev, fixedCosts: prev.fixedCosts.filter(f => f.id !== id) }));
 
-          // --- Forms ---
           const CashForm = () => {
             const [cash, setCash] = useState(data.currentCash);
             const [safety, setSafety] = useState(data.safetyLine);
@@ -293,7 +292,6 @@
             );
           };
 
-          // 新規追加：明細の編集フォーム
           const EditTransactionForm = () => {
             const tx = data.transactions.find(t => t.id === editingTransactionId);
             if (!tx) return null;
@@ -328,7 +326,6 @@
             );
           };
 
-          // 新規追加：テンプレート管理フォーム
           const TemplateForm = () => {
             const [view, setView] = useState('list'); 
             const [editingTpl, setEditingTpl] = useState(null);
@@ -471,23 +468,71 @@
                     工務店 資金繰りダッシュボード
                   </h1>
                 </div>
-                <div onClick={() => setModalType('cash')} className="bg-white px-6 py-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-5 cursor-pointer hover:border-blue-400 group">
-                  <div className="p-3 bg-blue-50 text-blue-600 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-colors"><i className="ph-fill ph-wallet text-[28px]"></i></div>
-                  <div><p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">現在の現預金残高</p><p className="text-3xl font-black text-slate-900 tracking-tight">{formatCurrency(data.currentCash)}</p></div>
+                <div className="flex gap-2">
+                    <button onClick={() => setModalType('project')} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl font-bold shadow-sm transition-all flex items-center gap-2">
+                      <i className="ph-bold ph-plus text-[18px]"></i> 新規案件
+                    </button>
+                    <button onClick={() => { setTargetProjectId(null); setModalType('transaction'); }} className="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-bold shadow-sm hover:bg-slate-50 transition-all flex items-center gap-2">
+                      <i className="ph-bold ph-currency-jpy text-[18px]"></i> 入出金追加
+                    </button>
+                    <button onClick={() => setModalType('fixedCost')} className="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-bold shadow-sm hover:bg-slate-50 transition-all flex items-center gap-2">
+                      <i className="ph-bold ph-calendar text-[18px]"></i> 固定費
+                    </button>
                 </div>
               </header>
 
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                 <div onClick={() => setModalType('cash')} className="bg-white px-6 py-5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-5 cursor-pointer hover:border-blue-400 group transition-colors">
+                  <div className="p-3 bg-blue-50 text-blue-600 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-colors"><i className="ph-fill ph-wallet text-[28px]"></i></div>
+                  <div>
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">現在の現預金残高</p>
+                    <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(data.currentCash)}</p>
+                  </div>
+                </div>
+
+                <div className={`bg-white px-6 py-5 rounded-2xl shadow-sm border ${minCashData['月末予想残高'] < 0 ? 'border-red-300 bg-red-50/50' : minCashData['月末予想残高'] < data.safetyLine ? 'border-amber-300 bg-amber-50/50' : 'border-slate-200'} flex items-center gap-5`}>
+                  <div className={`p-3 rounded-xl ${minCashData['月末予想残高'] < 0 ? 'bg-red-100 text-red-600' : minCashData['月末予想残高'] < data.safetyLine ? 'bg-amber-100 text-amber-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                    <i className="ph-fill ph-trend-down text-[28px]"></i>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">向こう{forecastMonthsCount}ヶ月の資金底予測 ({minCashData.fullLabel})</p>
+                    <p className={`text-2xl font-black tracking-tight ${minCashData['月末予想残高'] < 0 ? 'text-red-600' : 'text-slate-900'}`}>{formatCurrency(minCashData['月末予想残高'])}</p>
+                  </div>
+                </div>
+
+                <div className="bg-white px-6 py-5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-5">
+                  <div className={`p-3 rounded-xl ${averageProfitMargin >= 25 ? 'bg-emerald-50 text-emerald-600' : averageProfitMargin >= 15 ? 'bg-blue-50 text-blue-600' : 'bg-rose-50 text-rose-600'}`}>
+                    <i className="ph-fill ph-chart-pie-slice text-[28px]"></i>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">進行中案件 全体粗利率</p>
+                    <div className="flex items-baseline gap-2">
+                        <p className="text-2xl font-black text-slate-900 tracking-tight">{averageProfitMargin}<span className="text-lg">%</span></p>
+                        <p className="text-xs font-bold text-slate-400">/ {formatCurrency(totalExpectedProfit)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {dangerMonths.length > 0 && (
-                <div className="mb-8 bg-red-50 border border-red-200 p-5 rounded-2xl flex items-start gap-4 animate-in fade-in">
-                  <i className="ph-fill ph-warning text-[32px] text-red-600"></i>
-                  <div><h3 className="font-bold text-red-800 text-lg">資金ショートの危険があります</h3><p className="text-red-700 text-sm mt-1">{dangerMonths.map(d => d.label).join('、')} にマイナス予測です。</p></div>
+                <div className="mb-6 bg-red-50 border-l-4 border-red-500 p-5 rounded-r-2xl shadow-sm flex items-start gap-4 animate-in fade-in">
+                  <i className="ph-fill ph-warning-circle text-[32px] text-red-600"></i>
+                  <div>
+                    <h3 className="font-bold text-red-800 text-lg">資金ショートの危険があります！</h3>
+                    <div className="text-red-700 text-sm mt-2 space-y-1">
+                        {dangerMonths.map(d => (
+                            <p key={d.month}><strong>{d.fullLabel}</strong> に <strong className="text-red-900 text-base">{Math.abs(d['月末予想残高'])}万円</strong> の資金不足が発生する予測です。</p>
+                        ))}
+                    </div>
+                    <p className="text-xs text-red-600 mt-3 font-bold">※金融機関への融資相談や、施主様への入金前倒し交渉、業者への支払い先延ばし交渉を検討してください。</p>
+                  </div>
                 </div>
               )}
 
               <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
                 <div className="xl:col-span-8 bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
                   <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800"><i className="ph-bold ph-trend-up text-indigo-600"></i>資金繰り予測</h2>
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800"><i className="ph-bold ph-chart-line-up text-indigo-600"></i>資金繰り予測推移</h2>
                     <select value={forecastMonthsCount} onChange={(e) => setForecastMonthsCount(Number(e.target.value))} className="bg-white px-3 py-1.5 rounded-lg border border-slate-200 text-sm font-bold shadow-sm outline-none cursor-pointer">
                         <option value={6}>6ヶ月</option><option value={12}>1年</option><option value={24}>2年</option>
                     </select>
@@ -510,28 +555,26 @@
                 </div>
 
                 <div className="xl:col-span-4 flex flex-col gap-6">
-                  {/* クイックアクションのレイアウト変更 */}
-                  <div className="flex flex-col gap-3">
-                     <button onClick={() => setModalType('project')} className="bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-2xl font-bold shadow-sm transition-all flex items-center justify-center gap-3 group">
-                      <div className="bg-white/20 p-1.5 rounded-full group-hover:scale-110 transition-transform"><i className="ph-bold ph-plus text-[20px]"></i></div>
-                      <span className="text-lg">新規案件の登録</span>
-                    </button>
-                    <div className="grid grid-cols-3 gap-2">
-                      <button onClick={() => { setTargetProjectId(null); setModalType('transaction'); }} className="bg-white border border-slate-200 py-3 rounded-xl font-bold text-[11px] sm:text-xs shadow-sm hover:bg-slate-50 transition-colors flex flex-col items-center gap-1"><i className="ph-bold ph-currency-jpy text-[20px] text-emerald-500"></i> 個別予定</button>
-                      <button onClick={() => setModalType('fixedCost')} className="bg-white border border-slate-200 py-3 rounded-xl font-bold text-[11px] sm:text-xs shadow-sm hover:bg-slate-50 transition-colors flex flex-col items-center gap-1"><i className="ph-bold ph-calendar text-[20px] text-amber-500"></i> 固定費設定</button>
-                      <button onClick={() => setModalType('template')} className="bg-white border border-slate-200 py-3 rounded-xl font-bold text-[11px] sm:text-xs shadow-sm hover:bg-slate-50 transition-colors flex flex-col items-center gap-1"><i className="ph-bold ph-copy text-[20px] text-blue-500"></i> テンプレート</button>
-                    </div>
-                  </div>
-
                   <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col flex-grow overflow-hidden">
-                    <div className="p-5 border-b border-slate-100 bg-slate-50/50"><h2 className="text-lg font-bold flex items-center gap-2 text-slate-800"><i className="ph-fill ph-helmet text-amber-500"></i> 現場別進捗</h2></div>
+                    <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                        <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800"><i className="ph-fill ph-helmet text-amber-500"></i> 現場別 粗利・進捗管理</h2>
+                        <button onClick={() => setModalType('template')} className="text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded hover:bg-blue-100 flex items-center gap-1"><i className="ph-bold ph-copy"></i> テンプレート設定</button>
+                    </div>
                     <div className="p-4 space-y-4 overflow-y-auto max-h-[500px] custom-scrollbar">
                       {projectHealth.map(p => (
                         <div key={p.id} className={`rounded-2xl border transition-all ${expandedProjectId === p.id ? 'border-indigo-300 ring-4 ring-indigo-50 shadow-md bg-white' : 'border-slate-200 hover:border-slate-300 bg-white'}`}>
                           <div className="p-5 cursor-pointer" onClick={() => setExpandedProjectId(expandedProjectId === p.id ? null : p.id)}>
                             <div className="flex justify-between items-start mb-2">
-                                <div><span className={`text-[10px] font-bold px-2 py-1 rounded ${p.status === '施工中' ? 'bg-blue-100 text-blue-700' : p.status === '契約済' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{p.status}</span><h3 className="font-bold text-slate-800 mt-1">{p.name}</h3></div>
-                                <div className="text-right flex flex-col items-end"><p className="font-black text-lg">{formatCurrency(p.contractAmount)}</p>{expandedProjectId === p.id ? <i className="ph-bold ph-caret-up text-slate-400 mt-1"></i> : <i className="ph-bold ph-caret-down text-slate-400 mt-1"></i>}</div>
+                                <div>
+                                    <span className={`text-[10px] font-bold px-2 py-1 rounded ${p.status === '施工中' ? 'bg-blue-100 text-blue-700' : p.status === '契約済' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{p.status}</span>
+                                    <h3 className="font-bold text-slate-800 mt-2">{p.name}</h3>
+                                </div>
+                                <div className="text-right flex flex-col items-end">
+                                    <p className="font-black text-lg">{formatCurrency(p.contractAmount)}</p>
+                                    <div className={`mt-1 px-2 py-0.5 rounded text-[10px] font-bold ${p.profitMargin < 20 ? 'bg-rose-100 text-rose-700' : p.profitMargin >= 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                                        粗利率 {p.profitMargin}%
+                                    </div>
+                                </div>
                             </div>
                             {!expandedProjectId && (
                               <div className="flex gap-2 h-1.5 bg-slate-100 rounded-full overflow-hidden mt-3">
@@ -542,8 +585,14 @@
                           {expandedProjectId === p.id && (
                             <div className="px-5 pb-5 border-t border-slate-100 bg-slate-50/50">
                                 <div className="grid grid-cols-2 gap-4 py-4 mb-2">
-                                    <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm"><p className="text-[10px] font-bold text-slate-400 uppercase">入金済</p><p className="font-black text-emerald-600 text-sm">{formatCurrency(p.receivedIncome)}</p></div>
-                                    <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm"><p className="text-[10px] font-bold text-slate-400 uppercase">原価予測</p><p className="font-black text-rose-600 text-sm">{formatCurrency(p.totalExpense)}</p></div>
+                                    <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase">入金済額</p>
+                                        <p className="font-black text-emerald-600 text-sm">{formatCurrency(p.receivedIncome)}</p>
+                                    </div>
+                                    <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase">総原価予測</p>
+                                        <p className="font-black text-rose-600 text-sm">{formatCurrency(p.totalExpense)}</p>
+                                    </div>
                                 </div>
                                 <div className="flex justify-between items-center mb-2">
                                   <h4 className="text-xs font-bold text-slate-500">入出金明細</h4>
@@ -553,13 +602,12 @@
                                     {p.transactions.map(t => (
                                         <li key={t.id} className="group flex justify-between items-center text-xs py-2 px-3 bg-white rounded-lg border border-slate-100 shadow-sm hover:border-slate-300 transition-colors">
                                             <div className="flex items-center gap-2 flex-1 overflow-hidden">
-                                              <input type="checkbox" checked={t.status.includes('済')} onChange={(e) => toggleTransactionStatus(t.id, t.type, e.target.checked)} className="cursor-pointer" />
+                                              <input type="checkbox" checked={t.status.includes('済')} onChange={(e) => toggleTransactionStatus(t.id, t.type, e.target.checked)} className="cursor-pointer w-4 h-4 rounded text-blue-600" />
                                               <span className={`truncate ${t.status.includes('済') ? 'line-through text-slate-400' : (t.type === 'income' ? 'font-bold text-emerald-700' : 'font-bold text-rose-700')}`}>{t.name}</span>
                                             </div>
                                             <div className="flex items-center gap-3 shrink-0">
                                               <span className={t.status.includes('済') ? 'text-slate-400 font-bold' : 'font-bold text-slate-700'}>{t.amount}万</span>
                                               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                {/* 編集ボタンの追加 */}
                                                 <button onClick={() => { setEditingTransactionId(t.id); setModalType('editTransaction'); }} className="p-1 text-slate-400 hover:text-blue-500 bg-slate-50 rounded"><i className="ph-bold ph-pencil-simple text-[14px]"></i></button>
                                                 <button onClick={() => deleteTransaction(t.id)} className="p-1 text-slate-400 hover:text-red-500 bg-slate-50 rounded"><i className="ph-bold ph-trash text-[14px]"></i></button>
                                               </div>
@@ -567,8 +615,12 @@
                                         </li>
                                     ))}
                                 </ul>
-                                <div className="mt-4 text-right">
-                                  <button onClick={() => deleteProject(p.id)} className="text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors"><i className="ph ph-trash"></i> 案件と明細をすべて削除</button>
+                                <div className="mt-4 flex justify-between items-center border-t border-slate-200 pt-3">
+                                  <div>
+                                      <p className="text-[10px] font-bold text-slate-500">粗利予測額</p>
+                                      <p className={`font-black text-base ${p.profitMargin < 20 ? 'text-rose-600' : 'text-slate-800'}`}>{formatCurrency(p.expectedProfit)}</p>
+                                  </div>
+                                  <button onClick={() => deleteProject(p.id)} className="text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors"><i className="ph ph-trash"></i> 案件ごと削除</button>
                                 </div>
                             </div>
                           )}
@@ -579,13 +631,10 @@
                 </div>
               </div>
 
-              {/* モーダル群 */}
               <ModalWrapper isOpen={modalType === 'cash'} onClose={() => setModalType(null)} title="現預金と安全ラインの設定"><CashForm /></ModalWrapper>
               <ModalWrapper isOpen={modalType === 'project'} onClose={() => setModalType(null)} title="新規案件の登録"><ProjectForm /></ModalWrapper>
               <ModalWrapper isOpen={modalType === 'transaction'} onClose={() => setModalType(null)} title="入出金予定の追加"><TransactionForm /></ModalWrapper>
               <ModalWrapper isOpen={modalType === 'fixedCost'} onClose={() => setModalType(null)} title="固定費・スポット支出の設定"><FixedCostForm /></ModalWrapper>
-              
-              {/* 新規追加モーダル */}
               <ModalWrapper isOpen={modalType === 'template'} onClose={() => setModalType(null)} title="テンプレート管理"><TemplateForm /></ModalWrapper>
               <ModalWrapper isOpen={modalType === 'editTransaction'} onClose={() => setModalType(null)} title="明細の編集"><EditTransactionForm /></ModalWrapper>
             </div>
