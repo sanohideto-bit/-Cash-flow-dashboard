@@ -1,693 +1,742 @@
-import React, { useState, useMemo } from 'react';
-import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ReferenceLine, ComposedChart, Bar
-} from 'recharts';
-import { 
-  AlertTriangle, DollarSign, Calendar, TrendingUp, TrendingDown, Building2, HardHat, Wallet, Plus, Edit2, Trash2, ChevronDown, ChevronUp, X, CheckCircle, Copy, Settings2
-} from 'lucide-react';
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工務店向け 資金繰りダッシュボード</title>
 
-// --- ランダムID生成 ---
-const generateId = () => Math.random().toString(36).substring(2, 9);
-
-// --- ヘルパー: 月リスト生成 ---
-const generateMonthsList = (count) => {
-  const months = [];
-  const now = new Date();
-  for (let i = 0; i < count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    months.push(`${year}-${month}`);
-  }
-  return months;
-};
-
-// --- ヘルパー: 日付計算 ---
-const calculateDate = (startMonthStr, offsetMonths, type) => {
-  const [y, m] = startMonthStr.split('-');
-  // 入金は15日、支払は月末(28日とする)
-  const day = type === 'income' ? 15 : 28;
-  const d = new Date(Number(y), Number(m) - 1 + offsetMonths, day);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-// --- テンプレート定義 (提供画像をベースに作成) ---
-const TEMPLATES = [
-  {
-    id: 'tpl1',
-    name: '木造住宅 標準モデル (工期7ヶ月)',
-    baseAmount: 2500, // 割合計算の基準値
-    items: [
-      { offset: 0, type: 'income', name: '契約金 (10%)', ratio: 0.10 },
-      { offset: 0, type: 'expense', name: '設計・確認申請費等', ratio: 50 / 2500 },
-      { offset: 1, type: 'expense', name: '地盤改良等 (外注)', ratio: 100 / 2500 },
-      { offset: 2, type: 'income', name: '着工金 (30%)', ratio: 0.30 },
-      { offset: 2, type: 'expense', name: '基礎工事 (外注)', ratio: 150 / 2500 },
-      { offset: 3, type: 'income', name: '上棟金 (30%)', ratio: 0.30 },
-      { offset: 3, type: 'expense', name: 'プレカット・サッシ等', ratio: 450 / 2500 },
-      { offset: 4, type: 'expense', name: '造作・設備工事 (外注)', ratio: 350 / 2500 },
-      { offset: 5, type: 'expense', name: '内装・外構工事 (外注)', ratio: 300 / 2500 },
-      { offset: 6, type: 'income', name: '最終金 (30%)', ratio: 0.30 },
-      { offset: 6, type: 'expense', name: '諸検査・残払い', ratio: 200 / 2500 },
-    ]
-  }
-];
-
-// --- デモ用初期データ ---
-const INITIAL_DATA = {
-  currentCash: 1200, 
-  safetyLine: 800,   
-  projects: [
-    { id: 'p1', name: 'A様邸 新築工事', contractAmount: 2420, status: '施工中' },
-    { id: 'p2', name: 'Bアパート 外壁改修', contractAmount: 880, status: '契約済' },
-  ],
-  transactions: [
-    { id: 't1', projectId: 'p1', type: 'income', name: '着手金', amount: 726, date: '2026-03-15', status: '入金済' },
-    { id: 't2', projectId: 'p1', type: 'expense', name: '基礎・躯体業者', amount: 500, date: '2026-04-30', status: '未支払' },
-    { id: 't3', projectId: 'p1', type: 'expense', name: '木材仕入', amount: 600, date: '2026-05-31', status: '未支払' },
-    { id: 't4', projectId: 'p1', type: 'income', name: '中間金', amount: 726, date: '2026-06-15', status: '未入金' },
-    { id: 't7', projectId: 'p2', type: 'expense', name: '足場・資材', amount: 200, date: '2026-05-31', status: '未支払' },
-    { id: 't8', projectId: 'p2', type: 'income', name: '着手金', amount: 300, date: '2026-05-15', status: '未入金' },
-  ],
-  fixedCosts: [
-    { id: 'f1', name: '役員報酬・社員給与', amount: 150, type: 'monthly' },
-    { id: 'f2', name: '事務所家賃・経費', amount: 50, type: 'monthly' },
-    { id: 'f3', name: '銀行借入 元本返済', amount: 80, type: 'monthly' }, 
-    { id: 'f4', name: '消費税・法人税 納付', amount: 350, type: 'spot', month: '2026-05' }, 
-  ]
-};
-
-const formatCurrency = (amount) => new Intl.NumberFormat('ja-JP').format(amount) + '万円';
-
-// --- モーダルラッパー ---
-const ModalWrapper = ({ isOpen, onClose, title, children }) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
-        <div className="flex justify-between items-center px-6 py-4 border-b border-slate-100 bg-slate-50">
-          <h2 className="text-lg font-bold text-slate-800">{title}</h2>
-          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
-            <X size={20} />
-          </button>
-        </div>
-        <div className="p-6 overflow-y-auto">
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-
-// === メインコンポーネント ===
-export default function CashflowDashboard() {
-  const [data, setData] = useState(INITIAL_DATA);
-  const [forecastMonthsCount, setForecastMonthsCount] = useState(12); // 初期表示1年(12ヶ月)
-  const months = useMemo(() => generateMonthsList(forecastMonthsCount), [forecastMonthsCount]);
-  
-  const [expandedProjectId, setExpandedProjectId] = useState(null);
-  const [modalType, setModalType] = useState(null);
-  const [targetProjectId, setTargetProjectId] = useState(null);
-
-  const inputClass = "w-full border border-slate-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow";
-
-  // --- 計算ロジック ---
-  const cashflowData = useMemo(() => {
-    let runningBalance = data.currentCash;
+    <!-- Tailwind CSS (スタイリング) -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    return months.map(month => {
-      const income = data.transactions
-        .filter(t => t.type === 'income' && t.date.startsWith(month) && t.status !== '入金済')
-        .reduce((sum, t) => sum + t.amount, 0);
+    <!-- Phosphor Icons (アイコン) -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
 
-      const expense = data.transactions
-        .filter(t => t.type === 'expense' && t.date.startsWith(month) && t.status !== '支払済')
-        .reduce((sum, t) => sum + t.amount, 0);
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
-      const fixedCost = data.fixedCosts.reduce((sum, f) => {
-        if (f.type === 'monthly') return sum + f.amount;
-        if (f.type === 'spot' && f.month === month) return sum + f.amount;
-        return sum;
-      }, 0);
+    <!-- PropTypes (Rechartsが内部で依存するライブラリ) -->
+    <script crossorigin src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
 
-      const totalOut = expense + fixedCost;
-      runningBalance = runningBalance + income - totalOut;
+    <!-- Recharts (グラフ描画: 正しいUMDファイルURLに修正) -->
+    <script crossorigin src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
 
-      return {
-        month,
-        label: `${month.split('-')[1]}月`,
-        fullLabel: `${month.replace('-', '年')}月`,
-        '入金予定': income,
-        '支払予定': totalOut,
-        '月末予想残高': runningBalance,
-        isDanger: runningBalance < 0,
-        isWarning: runningBalance >= 0 && runningBalance < data.safetyLine
-      };
-    });
-  }, [data, months]);
+    <!-- Babel (ブラウザ内でReactコードを変換して実行) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  const projectHealth = useMemo(() => {
-    return data.projects.map(p => {
-      const pTrans = data.transactions.filter(t => t.projectId === p.id);
-      const receivedIncome = pTrans.filter(t => t.type === 'income' && t.status === '入金済').reduce((sum, t) => sum + t.amount, 0);
-      const totalExpense = pTrans.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-      const expectedProfit = p.contractAmount - totalExpense;
-      const profitMargin = Math.round((expectedProfit / p.contractAmount) * 100) || 0;
-
-      return {
-        ...p,
-        receivedIncome, totalExpense, expectedProfit, profitMargin,
-        incomeProgress: Math.round((receivedIncome / p.contractAmount) * 100) || 0,
-        expenseProgress: Math.round((totalExpense / p.contractAmount) * 100) || 0,
-        transactions: pTrans.sort((a, b) => a.date.localeCompare(b.date))
-      };
-    });
-  }, [data]);
-
-  const dangerMonths = cashflowData.filter(d => d.isDanger);
-
-  // --- アクション ---
-  const toggleTransactionStatus = (id, type, isChecked) => {
-    setData(prev => ({
-      ...prev, transactions: prev.transactions.map(t => t.id === id ? { ...t, status: isChecked ? (type === 'income' ? '入金済' : '支払済') : (type === 'income' ? '未入金' : '未支払') } : t)
-    }));
-  };
-
-  const deleteTransaction = (id) => setData(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== id) }));
-  const deleteProject = (id) => setData(prev => ({ ...prev, projects: prev.projects.filter(p => p.id !== id), transactions: prev.transactions.filter(t => t.projectId !== id) }));
-  const deleteFixedCost = (id) => setData(prev => ({ ...prev, fixedCosts: prev.fixedCosts.filter(f => f.id !== id) }));
-
-  // --- フォームコンポーネント ---
-
-  // 資金設定
-  const CashForm = () => {
-    const [cash, setCash] = useState(data.currentCash);
-    const [safety, setSafety] = useState(data.safetyLine);
-    const handleSubmit = (e) => { e.preventDefault(); setData(prev => ({ ...prev, currentCash: Number(cash), safetyLine: Number(safety) })); setModalType(null); };
-    return (
-      <form onSubmit={handleSubmit} className="space-y-5">
-        <div>
-          <label className="block text-sm font-bold text-slate-700 mb-1">現在の現預金残高 (万円)</label>
-          <input type="number" value={cash} onChange={e => setCash(e.target.value)} className={inputClass} required />
-        </div>
-        <div>
-          <label className="block text-sm font-bold text-amber-700 mb-1">安全ライン (万円)</label>
-          <p className="text-xs text-slate-500 mb-2">※月商の1.5〜2ヶ月分を目安に設定してください。</p>
-          <input type="number" value={safety} onChange={e => setSafety(e.target.value)} className={inputClass} required />
-        </div>
-        <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-sm mt-4">設定を保存</button>
-      </form>
-    );
-  };
-
-  // 案件登録（テンプレート連携）
-  const ProjectForm = () => {
-    const [name, setName] = useState('');
-    const [amount, setAmount] = useState('');
-    const [status, setStatus] = useState('見積中');
-    const [useTemplate, setUseTemplate] = useState(false);
-    const [templateId, setTemplateId] = useState(TEMPLATES[0].id);
-    const [startMonth, setStartMonth] = useState(months[0]); // 初期値は今月
-
-    const handleSubmit = (e) => {
-      e.preventDefault();
-      const contractAmountNum = Number(amount);
-      const newProjectId = generateId();
-      const newProject = { id: newProjectId, name, contractAmount: contractAmountNum, status };
-      
-      let newTransactions = [];
-
-      // テンプレート自動展開ロジック
-      if (useTemplate) {
-        const tpl = TEMPLATES.find(t => t.id === templateId);
-        if (tpl) {
-          newTransactions = tpl.items.map(item => {
-            const calculatedAmount = Math.round(contractAmountNum * item.ratio);
-            return {
-              id: generateId(),
-              projectId: newProjectId,
-              type: item.type,
-              name: item.name,
-              amount: calculatedAmount,
-              date: calculateDate(startMonth, item.offset, item.type),
-              status: item.type === 'income' ? '未入金' : '未支払'
-            };
-          });
-        }
-      }
-
-      setData(prev => ({ 
-        ...prev, 
-        projects: [...prev.projects, newProject],
-        transactions: [...prev.transactions, ...newTransactions]
-      }));
-      setModalType(null);
-    };
-
-    return (
-      <form onSubmit={handleSubmit} className="space-y-5">
-        <div>
-          <label className="block text-sm font-bold text-slate-700 mb-1">案件名・現場名</label>
-          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例：D様邸 新築工事" className={inputClass} required />
-        </div>
-        <div>
-          <label className="block text-sm font-bold text-slate-700 mb-1">契約金額（税込・万円）</label>
-          <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="例：2500" className={inputClass} required />
-        </div>
-        <div>
-          <label className="block text-sm font-bold text-slate-700 mb-1">現在のステータス</label>
-          <select value={status} onChange={e => setStatus(e.target.value)} className={inputClass}>
-            <option value="見積中">見積中（確度の高い見込み）</option>
-            <option value="契約済">契約済（未着工）</option>
-            <option value="施工中">施工中</option>
-          </select>
-        </div>
-
-        {/* テンプレートオプション */}
-        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-6">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input type="checkbox" checked={useTemplate} onChange={e => setUseTemplate(e.target.checked)} className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500" />
-            <span className="font-bold text-slate-800 flex items-center gap-2"><Copy size={16} className="text-blue-500"/> テンプレートから入出金予定を自動生成する</span>
-          </label>
-          
-          {useTemplate && (
-            <div className="mt-4 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200 pl-8">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">使用するテンプレート</label>
-                <select value={templateId} onChange={e => setTemplateId(e.target.value)} className={inputClass}>
-                  {TEMPLATES.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">契約・開始月 (基準月)</label>
-                <input type="month" value={startMonth} onChange={e => setStartMonth(e.target.value)} className={inputClass} required={useTemplate} />
-                <p className="text-[10px] text-slate-500 mt-1">※この月を起点に、自動で数ヶ月先までの予定を展開します。</p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-sm mt-4">案件を登録する</button>
-      </form>
-    );
-  };
-
-  // 入出金予定
-  const TransactionForm = () => {
-    const [projectId, setProjectId] = useState(targetProjectId || (data.projects[0]?.id || ''));
-    const [type, setType] = useState('expense');
-    const [name, setName] = useState('');
-    const [amount, setAmount] = useState('');
-    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-
-    const handleSubmit = (e) => {
-      e.preventDefault();
-      const newTx = { id: generateId(), projectId, type, name, amount: Number(amount), date, status: type === 'income' ? '未入金' : '未支払' };
-      setData(prev => ({ ...prev, transactions: [...prev.transactions, newTx] }));
-      setModalType(null);
-    };
-
-    if(data.projects.length === 0) return <p className="text-red-500 text-sm">先に案件を登録してください。</p>;
-
-    return (
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-bold text-slate-700 mb-1">対象の現場</label>
-          <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputClass}>
-            {data.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </div>
-        <div className="flex gap-4 bg-slate-50 p-3 rounded-lg border border-slate-200">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="radio" checked={type === 'expense'} onChange={() => setType('expense')} className="w-4 h-4 text-rose-600 focus:ring-rose-500" />
-            <span className="text-sm font-bold text-rose-700">支払 (原価・経費)</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="radio" checked={type === 'income'} onChange={() => setType('income')} className="w-4 h-4 text-emerald-600 focus:ring-emerald-500" />
-            <span className="text-sm font-bold text-emerald-700">入金 (売上)</span>
-          </label>
-        </div>
-        <div>
-          <label className="block text-sm font-bold text-slate-700 mb-1">名目（業者名や支払種別）</label>
-          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例：木材仕入、着手金など" className={inputClass} required />
-        </div>
-        <div className="flex gap-4">
-          <div className="flex-1">
-            <label className="block text-sm font-bold text-slate-700 mb-1">金額（税込・万円）</label>
-            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className={inputClass} required />
-          </div>
-          <div className="flex-1">
-            <label className="block text-sm font-bold text-slate-700 mb-1">予定日</label>
-            <input type="date" value={date} onChange={e => setDate(e.target.value)} className={inputClass} required />
-          </div>
-        </div>
-        <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 mt-4">予定を追加</button>
-      </form>
-    );
-  };
-
-  // 固定費管理
-  const FixedCostForm = () => {
-    const [name, setName] = useState('');
-    const [amount, setAmount] = useState('');
-    const [type, setType] = useState('monthly');
-    const [month, setMonth] = useState(months[0]);
-
-    const handleAdd = (e) => {
-      e.preventDefault();
-      const newFc = { id: generateId(), name, amount: Number(amount), type, month: type === 'spot' ? month : undefined };
-      setData(prev => ({ ...prev, fixedCosts: [...prev.fixedCosts, newFc] }));
-      setName(''); setAmount('');
-    };
-
-    return (
-      <div className="space-y-6">
-        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 max-h-48 overflow-y-auto shadow-inner">
-          <h3 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">現在の設定一覧</h3>
-          {data.fixedCosts.length === 0 ? <p className="text-sm text-slate-400">登録されていません</p> : (
-            <ul className="space-y-2">
-              {data.fixedCosts.map(f => (
-                <li key={f.id} className="flex justify-between items-center text-sm bg-white p-3 rounded-lg border border-slate-100 shadow-sm">
-                  <div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded mr-2 ${f.type === 'monthly' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                      {f.type === 'monthly' ? '毎月' : `スポット (${f.month.split('-')[1]}月)`}
-                    </span>
-                    <span className="font-semibold text-slate-700">{f.name}</span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className="font-bold">{f.amount}万円</span>
-                    <button onClick={() => deleteFixedCost(f.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1"><Trash2 size={16}/></button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <form onSubmit={handleAdd} className="space-y-4 pt-2">
-          <h3 className="text-sm font-bold text-slate-800 border-b border-slate-100 pb-2">新規追加</h3>
-          <div className="flex gap-6 mb-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="radio" checked={type === 'monthly'} onChange={() => setType('monthly')} className="w-4 h-4 text-blue-600 focus:ring-blue-500" />
-              <span className="text-sm font-bold text-slate-700">毎月発生</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="radio" checked={type === 'spot'} onChange={() => setType('spot')} className="w-4 h-4 text-amber-600 focus:ring-amber-500" />
-              <span className="text-sm font-bold text-slate-700">特定の月のみ (税金等)</span>
-            </label>
-          </div>
-          <div>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="名称 (例: 家賃, 法人税)" className={inputClass} required />
-          </div>
-          <div className="flex gap-3">
-            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="金額 (万円)" className={inputClass} required />
-            {type === 'spot' && (
-              <input type="month" value={month} onChange={e => setMonth(e.target.value)} className={inputClass} required />
-            )}
-          </div>
-          <button type="submit" className="w-full bg-slate-800 text-white py-3 rounded-xl font-bold hover:bg-slate-700 shadow-sm mt-2">一覧に追加する</button>
-        </form>
-      </div>
-    );
-  };
-
-
-  // === 画面描画 ===
-  return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-8 font-sans selection:bg-blue-100">
-      
-      {/* --- ヘッダー --- */}
-      <header className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 flex items-center gap-3">
-            <div className="p-2 bg-blue-600 text-white rounded-xl shadow-sm"><Building2 size={28} strokeWidth={2.5}/></div>
-            工務店 資金繰りダッシュボード
-          </h1>
-          <p className="text-slate-500 mt-2 text-sm font-medium">
-            現場の進捗と通帳残高をリンクさせ、未来の経営状態を可視化します。
-          </p>
-        </div>
-        
-        <div 
-          onClick={() => setModalType('cash')}
-          className="bg-white px-6 py-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-5 cursor-pointer hover:border-blue-400 hover:shadow-md transition-all group"
-        >
-          <div className="p-3 bg-blue-50 text-blue-600 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-colors">
-            <Wallet size={28} />
-          </div>
-          <div>
-            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1 mb-0.5">
-              現在の現預金残高 <Edit2 size={12} className="text-slate-300 group-hover:text-blue-400"/>
-            </p>
-            <p className="text-3xl font-black text-slate-900 tracking-tight">{formatCurrency(data.currentCash)}</p>
-          </div>
-        </div>
-      </header>
-
-      {/* --- アラート表示 --- */}
-      {dangerMonths.length > 0 && (
-        <div className="mb-8 bg-red-50 border border-red-200 p-5 rounded-2xl flex items-start gap-4 shadow-sm animate-in fade-in">
-          <div className="p-2 bg-red-100 text-red-600 rounded-full shrink-0">
-            <AlertTriangle size={24} />
-          </div>
-          <div>
-            <h3 className="font-bold text-red-800 text-lg">資金ショートの危険があります</h3>
-            <p className="text-red-700 text-sm mt-1 leading-relaxed">
-              <span className="font-bold bg-red-200 px-2 py-0.5 rounded mx-1">{dangerMonths.map(d => d.label).join('、')}</span> 
-              に通帳残高がマイナスになる予測です。支払いの調整、入金の早期化、または資金調達の準備を至急行ってください。
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* --- メインコンテンツ --- */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-        
-        {/* 左側：未来予測チャート */}
-        <div className="xl:col-span-8 bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
-          <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50/50">
-            <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800">
-              <TrendingUp className="text-indigo-600" size={24}/>
-              資金繰り予測グラフ
-            </h2>
-            
-            {/* 期間設定 UI */}
-            <div className="flex items-center gap-3 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm text-sm font-semibold">
-              <Settings2 size={16} className="text-slate-400"/>表示期間:
-              <select 
-                value={forecastMonthsCount} 
-                onChange={(e) => setForecastMonthsCount(Number(e.target.value))}
-                className="bg-transparent border-none focus:ring-0 text-indigo-700 font-bold cursor-pointer"
-              >
-                <option value={6}>半年 (6ヶ月)</option>
-                <option value={12}>1年 (12ヶ月)</option>
-                <option value={18}>1年半 (18ヶ月)</option>
-                <option value={24}>2年 (24ヶ月)</option>
-              </select>
-            </div>
-          </div>
-          
-          <div className="p-6 pt-8 flex-grow">
-            <div className="flex gap-4 text-xs font-bold text-slate-500 mb-4 justify-end">
-              <span className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-emerald-400 shadow-sm"></div> 入金</span>
-              <span className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-rose-400 shadow-sm"></div> 支払 (固定費込)</span>
-              <span className="flex items-center gap-1.5"><div className="w-4 h-1.5 bg-indigo-600 rounded-full"></div> 予想残高</span>
-            </div>
-            
-            {/* 期間が長い場合は横スクロールさせる */}
-            <div className="w-full h-[400px] overflow-x-auto pb-4 custom-scrollbar">
-              {/* 表示月数に応じて最小幅を確保 (12ヶ月なら700px, 24ヶ月なら1200px等) */}
-              <div style={{ minWidth: `${Math.max(100, forecastMonthsCount * 8)}%`, height: '100%' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={cashflowData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                    <XAxis dataKey="fullLabel" tickLine={false} axisLine={false} tick={{fill: '#64748b', fontSize: 12, fontWeight: 600}} dy={10} />
-                    <YAxis tickFormatter={(val) => `${val}万`} tickLine={false} axisLine={false} tick={{fill: '#64748b', fontSize: 12, fontWeight: 600}} dx={-10}/>
-                    <RechartsTooltip 
-                      formatter={(value) => formatCurrency(value)}
-                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)', padding: '12px 16px', fontWeight: 'bold' }}
-                      labelStyle={{ color: '#64748b', marginBottom: '8px' }}
-                    />
-                    <ReferenceLine y={0} stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" label={{ position: 'insideBottomLeft', value: '破産ライン (0円)', fill: '#ef4444', fontSize: 12, fontWeight: 'bold' }} />
-                    <ReferenceLine y={data.safetyLine} stroke="#f59e0b" strokeWidth={1} strokeDasharray="4 4" label={{ position: 'insideTopLeft', value: `安全ライン`, fill: '#d97706', fontSize: 12, fontWeight: 'bold' }} />
-
-                    <Bar dataKey="入金予定" barSize={forecastMonthsCount > 12 ? 12 : 24} fill="#34d399" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="支払予定" barSize={forecastMonthsCount > 12 ? 12 : 24} fill="#fb7185" radius={[4, 4, 0, 0]} />
-                    <Line type="monotone" dataKey="月末予想残高" stroke="#4f46e5" strokeWidth={4} dot={{ r: forecastMonthsCount > 12 ? 3 : 5, strokeWidth: 2, fill: '#fff' }} activeDot={{ r: 8, strokeWidth: 0 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 右側：現場管理 */}
-        <div className="xl:col-span-4 flex flex-col gap-6">
-          
-          {/* クイックアクション */}
-          <div className="grid grid-cols-2 gap-4">
-             <button onClick={() => setModalType('project')} className="bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-2xl font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2 group">
-              <div className="bg-white/20 p-2 rounded-full group-hover:scale-110 transition-transform"><Plus size={24} /></div>
-              <span>新規案件の登録</span>
-            </button>
-            <div className="flex flex-col gap-4">
-              <button onClick={() => { setTargetProjectId(null); setModalType('transaction'); }} className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 py-3 px-4 rounded-xl font-bold shadow-sm transition-colors flex items-center justify-center gap-2 text-sm">
-                <DollarSign size={16} className="text-emerald-500"/> 個別予定の追加
-              </button>
-              <button onClick={() => setModalType('fixedCost')} className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 py-3 px-4 rounded-xl font-bold shadow-sm transition-colors flex items-center justify-center gap-2 text-sm">
-                <Calendar size={16} className="text-amber-500"/> 固定費・税金設定
-              </button>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col flex-grow overflow-hidden">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
-                <HardHat className="text-amber-500" /> 現場別 進捗・明細
-              </h2>
-            </div>
-            
-            <div className="p-4 space-y-4 overflow-y-auto flex-grow max-h-[600px] custom-scrollbar">
-              {projectHealth.length === 0 ? (
-                <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 rounded-2xl">
-                  <p className="text-slate-400 font-bold mb-2">現場データがありません</p>
-                  <p className="text-xs text-slate-400">上のボタンから案件を登録してください。</p>
-                </div>
-              ) : projectHealth.map(p => {
-                const isExpanded = expandedProjectId === p.id;
-                
-                return (
-                  <div key={p.id} className={`rounded-2xl border transition-all duration-200 overflow-hidden ${isExpanded ? 'border-indigo-300 ring-4 ring-indigo-50 bg-white shadow-md' : 'border-slate-200 bg-white hover:border-slate-300 shadow-sm hover:shadow'}`}>
-                    
-                    {/* アコーディオン・ヘッダー */}
-                    <div className="p-5 cursor-pointer flex flex-col gap-4" onClick={() => setExpandedProjectId(isExpanded ? null : p.id)}>
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <span className={`text-[10px] font-black px-2 py-1 rounded mr-2 inline-block tracking-widest uppercase
-                            ${p.status === '施工中' ? 'bg-blue-100 text-blue-700' : p.status === '契約済' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
-                            {p.status}
-                          </span>
-                          <h3 className="font-bold text-slate-800 text-base mt-1">{p.name}</h3>
-                        </div>
-                        <div className="text-right flex flex-col items-end">
-                          <span className="font-black text-slate-900 text-lg">{formatCurrency(p.contractAmount)}</span>
-                          {isExpanded ? <ChevronUp size={18} className="text-slate-400 mt-1"/> : <ChevronDown size={18} className="text-slate-400 mt-1"/>}
-                        </div>
-                      </div>
-
-                      {/* ミニ進捗バー */}
-                      {!isExpanded && (
-                         <div className="flex gap-3 items-center">
-                           <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden flex">
-                             <div className="bg-emerald-400 h-full" style={{ width: `${Math.min(p.incomeProgress, 100)}%` }}></div>
-                           </div>
-                           <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden flex">
-                             <div className={`h-full ${p.expenseProgress > 80 ? 'bg-rose-500' : 'bg-amber-400'}`} style={{ width: `${Math.min(p.expenseProgress, 100)}%` }}></div>
-                           </div>
-                         </div>
-                      )}
-                    </div>
-
-                    {/* アコーディオン・展開部分 */}
-                    {isExpanded && (
-                      <div className="px-5 pb-5 border-t border-slate-100 bg-slate-50/50">
-                        
-                        <div className="grid grid-cols-2 gap-4 py-4 border-b border-slate-200 mb-4">
-                          <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">入金済 / 契約金</p>
-                            <p className="font-black text-emerald-600 text-sm">{formatCurrency(p.receivedIncome)} <span className="text-slate-400 font-medium ml-1">({p.incomeProgress}%)</span></p>
-                          </div>
-                          <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">原価支払 / 予測利益</p>
-                            <p className="font-black text-rose-600 text-sm">{formatCurrency(p.totalExpense)} <span className={`ml-1 font-medium ${p.profitMargin < 15 ? 'text-rose-500' : 'text-slate-400'}`}>/ {formatCurrency(p.expectedProfit)}</span></p>
-                          </div>
-                        </div>
-
-                        <div className="flex justify-between items-center mb-3">
-                          <h4 className="text-xs font-black text-slate-500 tracking-wider">入出金明細 (予定/実績)</h4>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); setTargetProjectId(p.id); setModalType('transaction'); }}
-                            className="text-[10px] bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 px-2 py-1 rounded-md font-bold transition-colors flex items-center gap-1 shadow-sm"
-                          >
-                            <Plus size={12}/> 追加
-                          </button>
-                        </div>
-                        
-                        {p.transactions.length === 0 ? <p className="text-xs text-slate-400 text-center py-4">予定がありません</p> : (
-                          <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
-                            {p.transactions.map(t => {
-                              const isIncome = t.type === 'income';
-                              const isDone = t.status.includes('済');
-                              return (
-                                <li key={t.id} className="group flex justify-between items-center text-xs py-2 px-3 bg-white rounded-lg border border-slate-100 shadow-sm hover:border-slate-300 transition-all">
-                                  <label className="flex items-center gap-3 cursor-pointer flex-1 overflow-hidden">
-                                    <input 
-                                      type="checkbox" 
-                                      checked={isDone}
-                                      onChange={(e) => toggleTransactionStatus(t.id, t.type, e.target.checked)}
-                                      className={`w-4 h-4 rounded-sm border-slate-300 focus:ring-0 cursor-pointer ${isIncome ? 'text-emerald-500' : 'text-rose-500'}`}
-                                    />
-                                    <span className={`truncate ${isDone ? 'text-slate-400 line-through' : (isIncome ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold')}`}>
-                                      {t.name}
-                                    </span>
-                                  </label>
-                                  <div className="flex items-center gap-3 ml-2 shrink-0">
-                                    <span className={`font-black ${isDone ? 'text-slate-400' : 'text-slate-700'}`}>{t.amount}万</span>
-                                    <span className="text-[10px] text-slate-400 w-12 text-right font-medium">{t.date.substring(5).replace('-', '/')}</span>
-                                    <button onClick={(e) => { e.stopPropagation(); deleteTransaction(t.id); }} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
-                                      <Trash2 size={14}/>
-                                    </button>
-                                  </div>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        )}
-                        
-                        <div className="mt-5 pt-3 text-right">
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}
-                            className="text-[10px] font-bold text-slate-400 hover:text-red-500 flex items-center justify-end gap-1 w-full p-1 transition-colors"
-                          >
-                            <Trash2 size={12}/> この案件と明細をすべて削除
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* --- CSS for custom scrollbar (inline for convenience) --- */}
-      <style dangerouslySetInnerHTML={{__html: `
+    <style>
+        /* カスタムスクロールバーの設定 */
         .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
         .custom-scrollbar:hover::-webkit-scrollbar-thumb { background-color: #94a3b8; }
-      `}} />
+        
+        body { font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 selection:bg-blue-100">
+    <!-- アプリケーションが描画される領域 -->
+    <div id="root"></div>
 
-      {/* --- モーダル群 --- */}
-      <ModalWrapper isOpen={modalType === 'cash'} onClose={() => setModalType(null)} title="現預金と安全ラインの設定">
-        <CashForm />
-      </ModalWrapper>
+    <script type="text/babel">
+        // --- ライブラリのロード確認 ---
+        if (!window.Recharts) {
+            console.error("Rechartsの読み込みに失敗しました。インターネット接続やCDNの状態を確認してください。");
+        }
 
-      <ModalWrapper isOpen={modalType === 'project'} onClose={() => setModalType(null)} title="新規案件の登録">
-        <ProjectForm />
-      </ModalWrapper>
+        // --- React Hooks & Recharts コンポーネントの読み込み ---
+        const { useState, useMemo } = React;
+        const { 
+          LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip: RechartsTooltip, Legend, ResponsiveContainer, ReferenceLine, ComposedChart, Bar
+        } = window.Recharts;
 
-      <ModalWrapper isOpen={modalType === 'transaction'} onClose={() => setModalType(null)} title="入出金予定の追加">
-        <TransactionForm />
-      </ModalWrapper>
+        // --- ランダムID生成 ---
+        const generateId = () => Math.random().toString(36).substring(2, 9);
 
-      <ModalWrapper isOpen={modalType === 'fixedCost'} onClose={() => setModalType(null)} title="固定費・スポット支出の設定">
-        <FixedCostForm />
-      </ModalWrapper>
+        // --- ヘルパー: 月リスト生成 ---
+        const generateMonthsList = (count) => {
+          const months = [];
+          const now = new Date();
+          for (let i = 0; i < count; i++) {
+            const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            months.push(`${year}-${month}`);
+          }
+          return months;
+        };
 
-    </div>
-  );
-}
+        // --- ヘルパー: 日付計算 ---
+        const calculateDate = (startMonthStr, offsetMonths, type) => {
+          const [y, m] = startMonthStr.split('-');
+          // 入金は15日、支払は月末(28日とする)
+          const day = type === 'income' ? 15 : 28;
+          const d = new Date(Number(y), Number(m) - 1 + offsetMonths, day);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        };
+
+        // --- テンプレート定義 (木造住宅 標準モデル) ---
+        const TEMPLATES = [
+          {
+            id: 'tpl1',
+            name: '木造住宅 標準モデル (工期7ヶ月)',
+            baseAmount: 2500, // 割合計算の基準値
+            items: [
+              { offset: 0, type: 'income', name: '契約金 (10%)', ratio: 0.10 },
+              { offset: 0, type: 'expense', name: '設計・確認申請費等', ratio: 50 / 2500 },
+              { offset: 1, type: 'expense', name: '地盤改良等 (外注)', ratio: 100 / 2500 },
+              { offset: 2, type: 'income', name: '着工金 (30%)', ratio: 0.30 },
+              { offset: 2, type: 'expense', name: '基礎工事 (外注)', ratio: 150 / 2500 },
+              { offset: 3, type: 'income', name: '上棟金 (30%)', ratio: 0.30 },
+              { offset: 3, type: 'expense', name: 'プレカット・サッシ等', ratio: 450 / 2500 },
+              { offset: 4, type: 'expense', name: '造作・設備工事 (外注)', ratio: 350 / 2500 },
+              { offset: 5, type: 'expense', name: '内装・外構工事 (外注)', ratio: 300 / 2500 },
+              { offset: 6, type: 'income', name: '最終金 (30%)', ratio: 0.30 },
+              { offset: 6, type: 'expense', name: '諸検査・残払い', ratio: 200 / 2500 },
+            ]
+          }
+        ];
+
+        // --- デモ用初期データ ---
+        const INITIAL_DATA = {
+          currentCash: 1200, 
+          safetyLine: 800,   
+          projects: [
+            { id: 'p1', name: 'A様邸 新築工事', contractAmount: 2420, status: '施工中' },
+            { id: 'p2', name: 'Bアパート 外壁改修', contractAmount: 880, status: '契約済' },
+          ],
+          transactions: [
+            { id: 't1', projectId: 'p1', type: 'income', name: '着手金', amount: 726, date: '2026-03-15', status: '入金済' },
+            { id: 't2', projectId: 'p1', type: 'expense', name: '基礎・躯体業者', amount: 500, date: '2026-04-30', status: '未支払' },
+            { id: 't3', projectId: 'p1', type: 'expense', name: '木材仕入', amount: 600, date: '2026-05-31', status: '未支払' },
+            { id: 't4', projectId: 'p1', type: 'income', name: '中間金', amount: 726, date: '2026-06-15', status: '未入金' },
+            { id: 't7', projectId: 'p2', type: 'expense', name: '足場・資材', amount: 200, date: '2026-05-31', status: '未支払' },
+            { id: 't8', projectId: 'p2', type: 'income', name: '着手金', amount: 300, date: '2026-05-15', status: '未入金' },
+          ],
+          fixedCosts: [
+            { id: 'f1', name: '役員報酬・社員給与', amount: 150, type: 'monthly' },
+            { id: 'f2', name: '事務所家賃・経費', amount: 50, type: 'monthly' },
+            { id: 'f3', name: '銀行借入 元本返済', amount: 80, type: 'monthly' }, 
+            { id: 'f4', name: '消費税・法人税 納付', amount: 350, type: 'spot', month: '2026-05' }, 
+          ]
+        };
+
+        const formatCurrency = (amount) => new Intl.NumberFormat('ja-JP').format(amount) + '万円';
+
+        // --- モーダルラッパー ---
+        const ModalWrapper = ({ isOpen, onClose, title, children }) => {
+          if (!isOpen) return null;
+          return (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center px-6 py-4 border-b border-slate-100 bg-slate-50">
+                  <h2 className="text-lg font-bold text-slate-800">{title}</h2>
+                  <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
+                    <i className="ph ph-x text-[20px]"></i>
+                  </button>
+                </div>
+                <div className="p-6 overflow-y-auto custom-scrollbar">
+                  {children}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // === メインコンポーネント ===
+        function CashflowDashboard() {
+          const [data, setData] = useState(INITIAL_DATA);
+          const [forecastMonthsCount, setForecastMonthsCount] = useState(12); // 初期表示1年(12ヶ月)
+          const months = useMemo(() => generateMonthsList(forecastMonthsCount), [forecastMonthsCount]);
+          
+          const [expandedProjectId, setExpandedProjectId] = useState(null);
+          const [modalType, setModalType] = useState(null);
+          const [targetProjectId, setTargetProjectId] = useState(null);
+
+          const inputClass = "w-full border border-slate-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow";
+
+          // --- 計算ロジック ---
+          const cashflowData = useMemo(() => {
+            let runningBalance = data.currentCash;
+            
+            return months.map(month => {
+              const income = data.transactions
+                .filter(t => t.type === 'income' && t.date.startsWith(month) && t.status !== '入金済')
+                .reduce((sum, t) => sum + t.amount, 0);
+
+              const expense = data.transactions
+                .filter(t => t.type === 'expense' && t.date.startsWith(month) && t.status !== '支払済')
+                .reduce((sum, t) => sum + t.amount, 0);
+
+              const fixedCost = data.fixedCosts.reduce((sum, f) => {
+                if (f.type === 'monthly') return sum + f.amount;
+                if (f.type === 'spot' && f.month === month) return sum + f.amount;
+                return sum;
+              }, 0);
+
+              const totalOut = expense + fixedCost;
+              runningBalance = runningBalance + income - totalOut;
+
+              return {
+                month,
+                label: `${month.split('-')[1]}月`,
+                fullLabel: `${month.replace('-', '年')}月`,
+                '入金予定': income,
+                '支払予定': totalOut,
+                '月末予想残高': runningBalance,
+                isDanger: runningBalance < 0,
+                isWarning: runningBalance >= 0 && runningBalance < data.safetyLine
+              };
+            });
+          }, [data, months]);
+
+          const projectHealth = useMemo(() => {
+            return data.projects.map(p => {
+              const pTrans = data.transactions.filter(t => t.projectId === p.id);
+              const receivedIncome = pTrans.filter(t => t.type === 'income' && t.status === '入金済').reduce((sum, t) => sum + t.amount, 0);
+              const totalExpense = pTrans.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+              const expectedProfit = p.contractAmount - totalExpense;
+              const profitMargin = Math.round((expectedProfit / p.contractAmount) * 100) || 0;
+
+              return {
+                ...p,
+                receivedIncome, totalExpense, expectedProfit, profitMargin,
+                incomeProgress: Math.round((receivedIncome / p.contractAmount) * 100) || 0,
+                expenseProgress: Math.round((totalExpense / p.contractAmount) * 100) || 0,
+                transactions: pTrans.sort((a, b) => a.date.localeCompare(b.date))
+              };
+            });
+          }, [data]);
+
+          const dangerMonths = cashflowData.filter(d => d.isDanger);
+
+          // --- アクション ---
+          const toggleTransactionStatus = (id, type, isChecked) => {
+            setData(prev => ({
+              ...prev, transactions: prev.transactions.map(t => t.id === id ? { ...t, status: isChecked ? (type === 'income' ? '入金済' : '支払済') : (type === 'income' ? '未入金' : '未支払') } : t)
+            }));
+          };
+
+          const deleteTransaction = (id) => setData(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== id) }));
+          const deleteProject = (id) => setData(prev => ({ ...prev, projects: prev.projects.filter(p => p.id !== id), transactions: prev.transactions.filter(t => t.projectId !== id) }));
+          const deleteFixedCost = (id) => setData(prev => ({ ...prev, fixedCosts: prev.fixedCosts.filter(f => f.id !== id) }));
+
+          // --- フォームコンポーネント ---
+
+          // 資金設定
+          const CashForm = () => {
+            const [cash, setCash] = useState(data.currentCash);
+            const [safety, setSafety] = useState(data.safetyLine);
+            const handleSubmit = (e) => { e.preventDefault(); setData(prev => ({ ...prev, currentCash: Number(cash), safetyLine: Number(safety) })); setModalType(null); };
+            return (
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">現在の現預金残高 (万円)</label>
+                  <input type="number" value={cash} onChange={e => setCash(e.target.value)} className={inputClass} required />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-amber-700 mb-1">安全ライン (万円)</label>
+                  <p className="text-xs text-slate-500 mb-2">※月商の1.5〜2ヶ月分を目安に設定してください。</p>
+                  <input type="number" value={safety} onChange={e => setSafety(e.target.value)} className={inputClass} required />
+                </div>
+                <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-sm mt-4">設定を保存</button>
+              </form>
+            );
+          };
+
+          // 案件登録（テンプレート連携）
+          const ProjectForm = () => {
+            const [name, setName] = useState('');
+            const [amount, setAmount] = useState('');
+            const [status, setStatus] = useState('見積中');
+            const [useTemplate, setUseTemplate] = useState(false);
+            const [templateId, setTemplateId] = useState(TEMPLATES[0].id);
+            const [startMonth, setStartMonth] = useState(months[0]); // 初期値は今月
+
+            const handleSubmit = (e) => {
+              e.preventDefault();
+              const contractAmountNum = Number(amount);
+              const newProjectId = generateId();
+              const newProject = { id: newProjectId, name, contractAmount: contractAmountNum, status };
+              
+              let newTransactions = [];
+
+              if (useTemplate) {
+                const tpl = TEMPLATES.find(t => t.id === templateId);
+                if (tpl) {
+                  newTransactions = tpl.items.map(item => {
+                    const calculatedAmount = Math.round(contractAmountNum * item.ratio);
+                    return {
+                      id: generateId(),
+                      projectId: newProjectId,
+                      type: item.type,
+                      name: item.name,
+                      amount: calculatedAmount,
+                      date: calculateDate(startMonth, item.offset, item.type),
+                      status: item.type === 'income' ? '未入金' : '未支払'
+                    };
+                  });
+                }
+              }
+
+              setData(prev => ({ 
+                ...prev, 
+                projects: [...prev.projects, newProject],
+                transactions: [...prev.transactions, ...newTransactions]
+              }));
+              setModalType(null);
+            };
+
+            return (
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">案件名・現場名</label>
+                  <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例：D様邸 新築工事" className={inputClass} required />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">契約金額（税込・万円）</label>
+                  <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="例：2500" className={inputClass} required />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">現在のステータス</label>
+                  <select value={status} onChange={e => setStatus(e.target.value)} className={inputClass}>
+                    <option value="見積中">見積中（確度の高い見込み）</option>
+                    <option value="契約済">契約済（未着工）</option>
+                    <option value="施工中">施工中</option>
+                  </select>
+                </div>
+
+                {/* テンプレートオプション */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-6">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={useTemplate} onChange={e => setUseTemplate(e.target.checked)} className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500" />
+                    <span className="font-bold text-slate-800 flex items-center gap-2">
+                        <i className="ph ph-copy text-[16px] text-blue-500"></i>
+                        テンプレートから入出金予定を自動生成する
+                    </span>
+                  </label>
+                  
+                  {useTemplate && (
+                    <div className="mt-4 space-y-4 pl-8">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 mb-1">使用するテンプレート</label>
+                        <select value={templateId} onChange={e => setTemplateId(e.target.value)} className={inputClass}>
+                          {TEMPLATES.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 mb-1">契約・開始月 (基準月)</label>
+                        <input type="month" value={startMonth} onChange={e => setStartMonth(e.target.value)} className={inputClass} required={useTemplate} />
+                        <p className="text-[10px] text-slate-500 mt-1">※この月を起点に、自動で数ヶ月先までの予定を展開します。</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-sm mt-4">案件を登録する</button>
+              </form>
+            );
+          };
+
+          // 入出金予定
+          const TransactionForm = () => {
+            const [projectId, setProjectId] = useState(targetProjectId || (data.projects[0]?.id || ''));
+            const [type, setType] = useState('expense');
+            const [name, setName] = useState('');
+            const [amount, setAmount] = useState('');
+            const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+
+            const handleSubmit = (e) => {
+              e.preventDefault();
+              const newTx = { id: generateId(), projectId, type, name, amount: Number(amount), date, status: type === 'income' ? '未入金' : '未支払' };
+              setData(prev => ({ ...prev, transactions: [...prev.transactions, newTx] }));
+              setModalType(null);
+            };
+
+            if(data.projects.length === 0) return <p className="text-red-500 text-sm">先に案件を登録してください。</p>;
+
+            return (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">対象の現場</label>
+                  <select value={projectId} onChange={e => setProjectId(e.target.value)} className={inputClass}>
+                    {data.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div className="flex gap-4 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" checked={type === 'expense'} onChange={() => setType('expense')} className="w-4 h-4 text-rose-600 focus:ring-rose-500" />
+                    <span className="text-sm font-bold text-rose-700">支払 (原価・経費)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" checked={type === 'income'} onChange={() => setType('income')} className="w-4 h-4 text-emerald-600 focus:ring-emerald-500" />
+                    <span className="text-sm font-bold text-emerald-700">入金 (売上)</span>
+                  </label>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">名目（業者名や支払種別）</label>
+                  <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例：木材仕入、着手金など" className={inputClass} required />
+                </div>
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">金額（税込・万円）</label>
+                    <input type="number" value={amount} onChange={e => setAmount(e.target.value)} className={inputClass} required />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">予定日</label>
+                    <input type="date" value={date} onChange={e => setDate(e.target.value)} className={inputClass} required />
+                  </div>
+                </div>
+                <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 mt-4">予定を追加</button>
+              </form>
+            );
+          };
+
+          // 固定費管理
+          const FixedCostForm = () => {
+            const [name, setName] = useState('');
+            const [amount, setAmount] = useState('');
+            const [type, setType] = useState('monthly');
+            const [month, setMonth] = useState(months[0]);
+
+            const handleAdd = (e) => {
+              e.preventDefault();
+              const newFc = { id: generateId(), name, amount: Number(amount), type, month: type === 'spot' ? month : undefined };
+              setData(prev => ({ ...prev, fixedCosts: [...prev.fixedCosts, newFc] }));
+              setName(''); setAmount('');
+            };
+
+            return (
+              <div className="space-y-6">
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 max-h-48 overflow-y-auto shadow-inner custom-scrollbar">
+                  <h3 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">現在の設定一覧</h3>
+                  {data.fixedCosts.length === 0 ? <p className="text-sm text-slate-400">登録されていません</p> : (
+                    <ul className="space-y-2">
+                      {data.fixedCosts.map(f => (
+                        <li key={f.id} className="flex justify-between items-center text-sm bg-white p-3 rounded-lg border border-slate-100 shadow-sm">
+                          <div>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded mr-2 ${f.type === 'monthly' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                              {f.type === 'monthly' ? '毎月' : `スポット (${f.month.split('-')[1]}月)`}
+                            </span>
+                            <span className="font-semibold text-slate-700">{f.name}</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="font-bold">{f.amount}万円</span>
+                            <button onClick={() => deleteFixedCost(f.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
+                              <i className="ph ph-trash text-[16px]"></i>
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <form onSubmit={handleAdd} className="space-y-4 pt-2">
+                  <h3 className="text-sm font-bold text-slate-800 border-b border-slate-100 pb-2">新規追加</h3>
+                  <div className="flex gap-6 mb-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" checked={type === 'monthly'} onChange={() => setType('monthly')} className="w-4 h-4 text-blue-600 focus:ring-blue-500" />
+                      <span className="text-sm font-bold text-slate-700">毎月発生</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" checked={type === 'spot'} onChange={() => setType('spot')} className="w-4 h-4 text-amber-600 focus:ring-amber-500" />
+                      <span className="text-sm font-bold text-slate-700">特定の月のみ (税金等)</span>
+                    </label>
+                  </div>
+                  <div>
+                    <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="名称 (例: 家賃, 法人税)" className={inputClass} required />
+                  </div>
+                  <div className="flex gap-3">
+                    <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="金額 (万円)" className={inputClass} required />
+                    {type === 'spot' && (
+                      <input type="month" value={month} onChange={e => setMonth(e.target.value)} className={inputClass} required />
+                    )}
+                  </div>
+                  <button type="submit" className="w-full bg-slate-800 text-white py-3 rounded-xl font-bold hover:bg-slate-700 shadow-sm mt-2">一覧に追加する</button>
+                </form>
+              </div>
+            );
+          };
+
+          // === 画面描画 ===
+          return (
+            <div className="p-4 md:p-8 font-sans">
+              
+              {/* --- ヘッダー --- */}
+              <header className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                  <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 flex items-center gap-3">
+                    <div className="p-2 bg-blue-600 text-white rounded-xl shadow-sm">
+                        <i className="ph-fill ph-buildings text-[28px]"></i>
+                    </div>
+                    工務店 資金繰りダッシュボード
+                  </h1>
+                  <p className="text-slate-500 mt-2 text-sm font-medium">
+                    現場の進捗と通帳残高をリンクさせ、未来の経営状態を可視化します。
+                  </p>
+                </div>
+                
+                <div 
+                  onClick={() => setModalType('cash')}
+                  className="bg-white px-6 py-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-5 cursor-pointer hover:border-blue-400 hover:shadow-md transition-all group"
+                >
+                  <div className="p-3 bg-blue-50 text-blue-600 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-colors flex items-center justify-center">
+                    <i className="ph-fill ph-wallet text-[28px]"></i>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1 mb-0.5">
+                      現在の現預金残高 
+                      <i className="ph-bold ph-pencil-simple text-[12px] text-slate-300 group-hover:text-blue-400"></i>
+                    </p>
+                    <p className="text-3xl font-black text-slate-900 tracking-tight">{formatCurrency(data.currentCash)}</p>
+                  </div>
+                </div>
+              </header>
+
+              {/* --- アラート表示 --- */}
+              {dangerMonths.length > 0 && (
+                <div className="mb-8 bg-red-50 border border-red-200 p-5 rounded-2xl flex items-start gap-4 shadow-sm animate-in fade-in">
+                  <div className="p-2 bg-red-100 text-red-600 rounded-full shrink-0 flex items-center justify-center">
+                    <i className="ph-fill ph-warning text-[24px]"></i>
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-red-800 text-lg">資金ショートの危険があります</h3>
+                    <p className="text-red-700 text-sm mt-1 leading-relaxed">
+                      <span className="font-bold bg-red-200 px-2 py-0.5 rounded mx-1">{dangerMonths.map(d => d.label).join('、')}</span> 
+                      に通帳残高がマイナスになる予測です。支払いの調整、入金の早期化、または資金調達の準備を至急行ってください。
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* --- メインコンテンツ --- */}
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+                
+                {/* 左側：未来予測チャート */}
+                <div className="xl:col-span-8 bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50/50">
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800">
+                      <i className="ph-bold ph-trend-up text-[24px] text-indigo-600"></i>
+                      資金繰り予測グラフ
+                    </h2>
+                    
+                    {/* 期間設定 UI */}
+                    <div className="flex items-center gap-3 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm text-sm font-semibold">
+                      <i className="ph-bold ph-sliders-horizontal text-[16px] text-slate-400"></i>表示期間:
+                      <select 
+                        value={forecastMonthsCount} 
+                        onChange={(e) => setForecastMonthsCount(Number(e.target.value))}
+                        className="bg-transparent border-none focus:ring-0 text-indigo-700 font-bold cursor-pointer outline-none"
+                      >
+                        <option value={6}>半年 (6ヶ月)</option>
+                        <option value={12}>1年 (12ヶ月)</option>
+                        <option value={18}>1年半 (18ヶ月)</option>
+                        <option value={24}>2年 (24ヶ月)</option>
+                      </select>
+                    </div>
+                  </div>
+                  
+                  <div className="p-6 pt-8 flex-grow">
+                    <div className="flex gap-4 text-xs font-bold text-slate-500 mb-4 justify-end">
+                      <span className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-emerald-400 shadow-sm"></div> 入金</span>
+                      <span className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-rose-400 shadow-sm"></div> 支払 (固定費込)</span>
+                      <span className="flex items-center gap-1.5"><div className="w-4 h-1.5 bg-indigo-600 rounded-full"></div> 予想残高</span>
+                    </div>
+                    
+                    {/* 期間が長い場合は横スクロールさせる */}
+                    <div className="w-full h-[400px] overflow-x-auto pb-4 custom-scrollbar">
+                      <div style={{ minWidth: `${Math.max(100, forecastMonthsCount * 8)}%`, height: '100%' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ComposedChart data={cashflowData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                            <XAxis dataKey="fullLabel" tickLine={false} axisLine={false} tick={{fill: '#64748b', fontSize: 12, fontWeight: 600}} dy={10} />
+                            <YAxis tickFormatter={(val) => `${val}万`} tickLine={false} axisLine={false} tick={{fill: '#64748b', fontSize: 12, fontWeight: 600}} dx={-10}/>
+                            <RechartsTooltip 
+                              formatter={(value) => formatCurrency(value)}
+                              contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)', padding: '12px 16px', fontWeight: 'bold' }}
+                              labelStyle={{ color: '#64748b', marginBottom: '8px' }}
+                            />
+                            <ReferenceLine y={0} stroke="#ef4444" strokeWidth={2} strokeDasharray="4 4" label={{ position: 'insideBottomLeft', value: '破産ライン (0円)', fill: '#ef4444', fontSize: 12, fontWeight: 'bold' }} />
+                            <ReferenceLine y={data.safetyLine} stroke="#f59e0b" strokeWidth={1} strokeDasharray="4 4" label={{ position: 'insideTopLeft', value: `安全ライン`, fill: '#d97706', fontSize: 12, fontWeight: 'bold' }} />
+
+                            <Bar dataKey="入金予定" barSize={forecastMonthsCount > 12 ? 12 : 24} fill="#34d399" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="支払予定" barSize={forecastMonthsCount > 12 ? 12 : 24} fill="#fb7185" radius={[4, 4, 0, 0]} />
+                            <Line type="monotone" dataKey="月末予想残高" stroke="#4f46e5" strokeWidth={4} dot={{ r: forecastMonthsCount > 12 ? 3 : 5, strokeWidth: 2, fill: '#fff' }} activeDot={{ r: 8, strokeWidth: 0 }} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 右側：現場管理 */}
+                <div className="xl:col-span-4 flex flex-col gap-6">
+                  
+                  {/* クイックアクション */}
+                  <div className="grid grid-cols-2 gap-4">
+                     <button onClick={() => setModalType('project')} className="bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-2xl font-bold shadow-sm transition-all flex flex-col items-center justify-center gap-2 group">
+                      <div className="bg-white/20 p-2 rounded-full group-hover:scale-110 transition-transform">
+                          <i className="ph-bold ph-plus text-[24px]"></i>
+                      </div>
+                      <span>新規案件の登録</span>
+                    </button>
+                    <div className="flex flex-col gap-4">
+                      <button onClick={() => { setTargetProjectId(null); setModalType('transaction'); }} className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 py-3 px-4 rounded-xl font-bold shadow-sm transition-colors flex items-center justify-center gap-2 text-sm">
+                        <i className="ph-bold ph-currency-jpy text-[16px] text-emerald-500"></i> 個別予定の追加
+                      </button>
+                      <button onClick={() => setModalType('fixedCost')} className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 py-3 px-4 rounded-xl font-bold shadow-sm transition-colors flex items-center justify-center gap-2 text-sm">
+                        <i className="ph-bold ph-calendar text-[16px] text-amber-500"></i> 固定費・税金設定
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col flex-grow overflow-hidden">
+                    <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                      <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
+                        <i className="ph-fill ph-helmet text-[24px] text-amber-500"></i> 現場別 進捗・明細
+                      </h2>
+                    </div>
+                    
+                    <div className="p-4 space-y-4 overflow-y-auto flex-grow max-h-[600px] custom-scrollbar">
+                      {projectHealth.length === 0 ? (
+                        <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 rounded-2xl">
+                          <p className="text-slate-400 font-bold mb-2">現場データがありません</p>
+                          <p className="text-xs text-slate-400">上のボタンから案件を登録してください。</p>
+                        </div>
+                      ) : projectHealth.map(p => {
+                        const isExpanded = expandedProjectId === p.id;
+                        
+                        return (
+                          <div key={p.id} className={`rounded-2xl border transition-all duration-200 overflow-hidden ${isExpanded ? 'border-indigo-300 ring-4 ring-indigo-50 bg-white shadow-md' : 'border-slate-200 bg-white hover:border-slate-300 shadow-sm hover:shadow'}`}>
+                            
+                            {/* アコーディオン・ヘッダー */}
+                            <div className="p-5 cursor-pointer flex flex-col gap-4" onClick={() => setExpandedProjectId(isExpanded ? null : p.id)}>
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <span className={`text-[10px] font-black px-2 py-1 rounded mr-2 inline-block tracking-widest uppercase
+                                    ${p.status === '施工中' ? 'bg-blue-100 text-blue-700' : p.status === '契約済' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                                    {p.status}
+                                  </span>
+                                  <h3 className="font-bold text-slate-800 text-base mt-1">{p.name}</h3>
+                                </div>
+                                <div className="text-right flex flex-col items-end">
+                                  <span className="font-black text-slate-900 text-lg">{formatCurrency(p.contractAmount)}</span>
+                                  {isExpanded ? <i className="ph-bold ph-caret-up text-[18px] text-slate-400 mt-1"></i> : <i className="ph-bold ph-caret-down text-[18px] text-slate-400 mt-1"></i>}
+                                </div>
+                              </div>
+
+                              {/* ミニ進捗バー */}
+                              {!isExpanded && (
+                                 <div className="flex gap-3 items-center">
+                                   <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden flex">
+                                     <div className="bg-emerald-400 h-full" style={{ width: `${Math.min(p.incomeProgress, 100)}%` }}></div>
+                                   </div>
+                                   <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden flex">
+                                     <div className={`h-full ${p.expenseProgress > 80 ? 'bg-rose-500' : 'bg-amber-400'}`} style={{ width: `${Math.min(p.expenseProgress, 100)}%` }}></div>
+                                   </div>
+                                 </div>
+                              )}
+                            </div>
+
+                            {/* アコーディオン・展開部分 */}
+                            {isExpanded && (
+                              <div className="px-5 pb-5 border-t border-slate-100 bg-slate-50/50">
+                                
+                                <div className="grid grid-cols-2 gap-4 py-4 border-b border-slate-200 mb-4">
+                                  <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">入金済 / 契約金</p>
+                                    <p className="font-black text-emerald-600 text-sm">{formatCurrency(p.receivedIncome)} <span className="text-slate-400 font-medium ml-1">({p.incomeProgress}%)</span></p>
+                                  </div>
+                                  <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">原価支払 / 予測利益</p>
+                                    <p className="font-black text-rose-600 text-sm">{formatCurrency(p.totalExpense)} <span className={`ml-1 font-medium ${p.profitMargin < 15 ? 'text-rose-500' : 'text-slate-400'}`}>/ {formatCurrency(p.expectedProfit)}</span></p>
+                                  </div>
+                                </div>
+
+                                <div className="flex justify-between items-center mb-3">
+                                  <h4 className="text-xs font-black text-slate-500 tracking-wider">入出金明細 (予定/実績)</h4>
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); setTargetProjectId(p.id); setModalType('transaction'); }}
+                                    className="text-[10px] bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 px-2 py-1 rounded-md font-bold transition-colors flex items-center gap-1 shadow-sm"
+                                  >
+                                    <i className="ph-bold ph-plus text-[12px]"></i> 追加
+                                  </button>
+                                </div>
+                                
+                                {p.transactions.length === 0 ? <p className="text-xs text-slate-400 text-center py-4">予定がありません</p> : (
+                                  <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                                    {p.transactions.map(t => {
+                                      const isIncome = t.type === 'income';
+                                      const isDone = t.status.includes('済');
+                                      return (
+                                        <li key={t.id} className="group flex justify-between items-center text-xs py-2 px-3 bg-white rounded-lg border border-slate-100 shadow-sm hover:border-slate-300 transition-all">
+                                          <label className="flex items-center gap-3 cursor-pointer flex-1 overflow-hidden">
+                                            <input 
+                                              type="checkbox" 
+                                              checked={isDone}
+                                              onChange={(e) => toggleTransactionStatus(t.id, t.type, e.target.checked)}
+                                              className={`w-4 h-4 rounded-sm border-slate-300 cursor-pointer ${isIncome ? 'text-emerald-500 focus:ring-emerald-500' : 'text-rose-500 focus:ring-rose-500'}`}
+                                            />
+                                            <span className={`truncate ${isDone ? 'text-slate-400 line-through' : (isIncome ? 'text-emerald-700 font-bold' : 'text-rose-700 font-bold')}`}>
+                                              {t.name}
+                                            </span>
+                                          </label>
+                                          <div className="flex items-center gap-3 ml-2 shrink-0">
+                                            <span className={`font-black ${isDone ? 'text-slate-400' : 'text-slate-700'}`}>{t.amount}万</span>
+                                            <span className="text-[10px] text-slate-400 w-12 text-right font-medium">{t.date.substring(5).replace('-', '/')}</span>
+                                            <button onClick={(e) => { e.stopPropagation(); deleteTransaction(t.id); }} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
+                                              <i className="ph ph-trash text-[16px]"></i>
+                                            </button>
+                                          </div>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                )}
+                                
+                                <div className="mt-5 pt-3 text-right">
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}
+                                    className="text-[10px] font-bold text-slate-400 hover:text-red-500 flex items-center justify-end gap-1 w-full p-1 transition-colors"
+                                  >
+                                    <i className="ph ph-trash text-[16px]"></i> この案件と明細をすべて削除
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* --- モーダル群 --- */}
+              <ModalWrapper isOpen={modalType === 'cash'} onClose={() => setModalType(null)} title="現預金と安全ラインの設定">
+                <CashForm />
+              </ModalWrapper>
+
+              <ModalWrapper isOpen={modalType === 'project'} onClose={() => setModalType(null)} title="新規案件の登録">
+                <ProjectForm />
+              </ModalWrapper>
+
+              <ModalWrapper isOpen={modalType === 'transaction'} onClose={() => setModalType(null)} title="入出金予定の追加">
+                <TransactionForm />
+              </ModalWrapper>
+
+              <ModalWrapper isOpen={modalType === 'fixedCost'} onClose={() => setModalType(null)} title="固定費・スポット支出の設定">
+                <FixedCostForm />
+              </ModalWrapper>
+
+            </div>
+          );
+        }
+
+        // --- レンダリング ---
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<CashflowDashboard />);
+    </script>
+</body>
+</html>
